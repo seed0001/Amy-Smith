@@ -1,0 +1,10 @@
+node_modules/
+.env
+data/
+models/
+__pycache__/
+*.pyc
+
+# Her own runtime data: personality she edits, failure log she writes
+persona.md
+knowledge/tool-failures.md

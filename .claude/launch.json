@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "champ",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["src/index.js"],
+      "port": 3000
+    },
+    {
+      "name": "champ-test",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["src/index.js"],
+      "env": { "DASHBOARD_PORT": "3001", "DISCORD_TOKEN": "" },
+      "port": 3001,
+      "autoPort": false
+    }
+  ]
+}
