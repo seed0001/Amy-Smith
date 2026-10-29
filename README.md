@@ -1,131 +1,520 @@
-# new champ
+# Amy
 
-A Discord companion bot. It chats in text and voice, remembers people, runs its brain on local Ollama, speaks with Fish Audio, and listens with local Whisper. It also has a local web dashboard.
+**A Discord AI companion that talks in text and voice, remembers people, has moods and a 3D face, makes pictures and music, reads the news, manages your server, and can work on your projects.**
 
-## What it does
+Amy is a self-hosted Node.js bot. She runs on your own PC, keeps everything she learns in a local SQLite database, and can think with a local model (Ollama) or a cloud one (OpenRouter, Mistral, or a ChatGPT subscription). She isn't a command bot: you just talk to her, and she decides which of her ~40 tools to use.
 
-- **Text chat:** replies to DMs, @mentions, and every message in channels you choose.
-- **Voice:** `/join` puts it in your voice channel. It listens to everyone, transcribes speech locally with Whisper (free, on your GPU), answers out loud in a Fish Audio voice, and stops talking if you interrupt it. When it joins, it reads the room and says one natural hello: it introduces itself to anyone it hasn't met in voice, greets people it knows by name, and picks up where they left off. Turn this off with `VOICE_JOIN_GREETING=false` or the dashboard checkbox.
-- **Memory:**
-  - Short-term: keeps a rolling history per channel or voice session.
-  - Long-term: after each exchange it saves facts about each person and recalls the relevant ones semantically using `bge-m3` embeddings. Everything is stored in `data/companion.db`.
-- **Dashboard:** open http://127.0.0.1:3000 for:
-  - a live activity feed and voice controls (leave, make it say something)
-  - a chat playground
-  - a memory browser and editor
-  - conversation history
-  - her look (profile picture, reference sheet, saved outfits) and a context meter (prompt size, breakdown, growth, limits)
-  - settings: persona, model, voice ID, channels, wake word, join greeting
+---
 
-- **Remote dashboard (Cloudflare Tunnel):** set `DASHBOARD_PASSWORD` in `.env` first; without it the dashboard refuses every request that comes through a Cloudflare tunnel. Leave `DASHBOARD_HOST=127.0.0.1` (cloudflared connects locally). ChatGPT sign-in stays local-only.
-  - Recommended, needs a Cloudflare account and a domain on it: `cloudflared tunnel login`, `cloudflared tunnel create amy`, `cloudflared tunnel route dns amy dash.yourdomain.com`, then `cloudflared tunnel run --url http://127.0.0.1:3000 amy`. In Cloudflare Zero Trust → Access → Applications, add a self-hosted app for `dash.yourdomain.com` with an Allow policy for your email only, so Cloudflare checks who you are before the dashboard password prompt.
-  - Quick test, no account: `cloudflared tunnel --url http://127.0.0.1:3000` prints a random `https://….trycloudflare.com` address that lasts until you stop it. Anyone with the link reaches the password prompt, so use a strong password and stop it when done.
-  - Share only the address in a private DM, never in a channel, and never send the password over Discord.
+## Contents
 
-- **Images and looks:** ordinary/random image requests use `generate_image`, which never attaches her identity assets. Pictures of her use the separate `generate_self_image` tool and pipeline, with her existing identity reference sheet and current saved look when available. Self-images preserve her identity while following the requested scene and style, save to `data/images/`, and leave her profile picture unchanged. Missing identity assets cause an error; they are never silently replaced. Explicit wardrobe or appearance changes still use `look` and update the saved outfit/profile picture. The **Looks** tab shows the active picture, reference sheet and saved outfits. Self-image generation and appearance management remain owner-only and main-character-only; assets live in `data/looks/`.
+- [Highlights](#highlights)
+- [How she works](#how-she-works)
+- [Requirements](#requirements)
+- [Setup](#setup)
+- [Configuration (.env)](#configuration-env)
+- [Running her](#running-her)
+- [Features in detail](#features-in-detail)
+  - [Conversation and memory](#conversation-and-memory)
+  - [Voice](#voice)
+  - [Brains (language models)](#brains-language-models)
+  - [Pictures](#pictures)
+  - [Music](#music)
+  - [News feeds (RSS)](#news-feeds-rss)
+  - [Web search and research](#web-search-and-research)
+  - [Background helpers](#background-helpers)
+  - [Files and projects on your PC](#files-and-projects-on-your-pc)
+  - [Git](#git)
+  - [Server moderation](#server-moderation)
+  - [Inner life: moods, pressure, thoughts, journal](#inner-life-moods-pressure-thoughts-journal)
+  - [Dashboard](#dashboard)
+  - [Avatar studio and video replies](#avatar-studio-and-video-replies)
+  - [The doctor and life support](#the-doctor-and-life-support)
+  - [Reliability](#reliability)
+- [Slash commands](#slash-commands)
+- [Permissions and safety](#permissions-and-safety)
+- [Where things are stored](#where-things-are-stored)
+- [Project layout](#project-layout)
+- [Tests](#tests)
+- [Troubleshooting](#troubleshooting)
 
-- **Context meter:** every reply prompt is measured just before it is sent, and the **Context** tab shows how many tokens it used, what it was made of (persona, capabilities, memories, summaries, history, the current message, tool schemas), how the total has grown over recent turns, and the limits: the model's context window (`OLLAMA_NUM_CTX` for local Ollama, the model's `context_length` on OpenRouter), the raw history cap, and when messages roll into summaries. Token counts are estimates at about 4 characters per token, with the model's own reported prompt/completion counts attached when it sends them. The Overview has a small context card, and she can answer "what's our context window?" or "what's it looking like?" herself through `self` → `context`. Snapshots are kept in `data/context.jsonl`.
+---
 
-- **Avatar studio:** open http://127.0.0.1:3000/avatar.html, or use the Avatar button in the dashboard. It shows a 3D character that talks with the same brain, memory and Fish Audio voice:
-  - lip sync driven by the voice audio
-  - blinking, eyes that follow your pointer, idle head motion and breathing
-  - an emotional state that follows the conversation: the model tags each sentence with how she feels (playful, smug, worried, flirty and about 20 more), and her face, head pose, gaze and gestures blend from that. Moods carry between messages and fade back to calm. The Expressions button lets you nudge her feelings or play a gesture.
-  - push-to-talk: hold Space or the mic button. There is also a hands-free mode.
-  - realistic rendering: soft shadows, skin with light scattering, wet eyes, antialiased hair, ambient occlusion, bloom and film grain. Settings has a Graphics level (High / Medium / Low), and it steps down on its own if the frame rate drops.
-  - a cast: Amy (the main bot) and Leo stand side by side and share one conversation. Name someone ("Leo, ...") and they answer; otherwise whoever you last spoke to does. You can also click a character or use the picker at the top. Each has their own persona, Fish voice and mood, set under Settings > Characters. Amy's name, persona and voice are also the Discord bot's. Extra characters are in `data/characters.json`, with models in `data/characters/`.
-  - The avatar is `data/avatar.glb`. To use another file, set `AVATAR_PATH` in `.env`. For a quick try, drop a `.glb` on the page.
-  - Avatars with ARKit face shapes and `viseme_*` targets work best, such as Avaturn and Ready Player Me.
+## Highlights
+
+- **Talks like a person, not a command bot.** Replies to DMs, @mentions and every message in channels you choose. In voice she listens to everyone, answers out loud, and stops when you talk over her.
+- **Remembers.** Long-term memories per person (semantic recall with local `bge-m3` embeddings), rolling conversation summaries, profile cards with likes, dislikes and how things have been going between you.
+- **Has an inner life.** Moods that follow the conversation, "pressure" buckets (boredom, curiosity, loneliness and more) that make her want things, private solo thoughts, and a research journal.
+- **Switchable everything, by asking.** "Switch to OpenRouter and use Kimi", "use your local voice", "use Kontext for pictures", "go back to Gemini". Settings persist across restarts.
+- **Local-first options.** Local brain (Ollama), local speech-to-text (Whisper or Parakeet), local voices (Kokoro, XTTS v2 voice cloning), local image generation (FLUX.1 Kontext via stable-diffusion.cpp on Vulkan).
+- **Makes things.** Pictures (cloud or local, including pictures of herself that keep her face), songs with Google Lyria 3, files and whole projects on your PC.
+- **Reads the news.** Pulls RSS/Atom feeds on request and talks about what's new.
+- **Runs your server.** Warn, time out, kick, ban, channels, roles, invites, slowmode, with an automatic spam guard.
+- **Keeps herself running.** Life support restarts her when she stops, DMs you if she can't start, and the "doctor" (Claude Code) can fix her own code on your say-so.
+
+---
+
+## How she works
+
+```
+Discord text / voice ─┐
+Dashboard chat ───────┼─► companion.js ─► turn classifier (which tools, if any)
+Avatar studio ────────┘        │
+                               ├─► prompt: persona + capabilities + continuity + mood
+                               │           + recalled memories + summaries + history
+                               ├─► brain (Ollama / OpenRouter / Mistral / ChatGPT), streamed by sentence
+                               │      └─► tool calls (up to 4 rounds; 12 for file/code work)
+                               ├─► claim check: anything she says she did is checked against tool results
+                               └─► memory extraction, profile learning, mood update
+```
+
+- **Voice:** Discord audio → speech-to-text → the same pipeline → text-to-speech → back into the call, sentence by sentence, so she starts talking before the whole reply is written.
+- **Tools** are plain functions in `src/tools.js`. Each declares who may use it (owner, friends, guests) and when it's available. The model sees only the tools allowed for that person, that turn.
+
+---
+
+## Requirements
+
+| What | Why | Notes |
+|---|---|---|
+| **Windows 10/11** | Start scripts, life support, local runtimes | The core runs on any OS with Node; the `.bat`/`.ps1` scripts are Windows. |
+| **Node.js 22+** | Runs her | Developed on Node 24. |
+| **A Discord application** | Her account | Needs the Message Content and Server Members intents. |
+| **Ollama** | Local brain and memory embeddings | Pull `bge-m3` (embeddings, always needed) and a chat model, e.g. `gemma4:12b`. |
+| **FFmpeg** on PATH | Voice audio | Encodes and decodes speech for Discord. |
+| **Fish Audio key** | Cloud voice (default TTS) | Optional if you use Kokoro or XTTS. |
+| OpenRouter key | Cloud brains, images, music, vision | Optional but unlocks a lot. |
+| Tavily key | Web search | Optional. |
+| Groq key | Fast cloud speech-to-text | Optional; local Whisper is the default. |
+| Python 3.12+ | XTTS, Parakeet, FLUX.2 runtimes | Only for those optional local features. |
+| Claude Code CLI | The doctor | Optional; uses your own Claude login. |
+
+---
 
 ## Setup
 
-1. **Discord app.** Create one at https://discord.com/developers/applications.
-   - **Bot** tab: Reset Token and copy it. Under *Privileged Gateway Intents*, turn on **Message Content** and **Server Members**.
-   - **General Information:** copy the Application ID.
-   - **OAuth2 → URL Generator:** tick `bot` and `applications.commands`, then under bot permissions tick **Administrator** (needed to create and delete channels and roles, and to kick; her role must also sit above the roles she moderates). *View Channels, Send Messages, Read Message History, Connect, Speak* alone is enough for chat, but every moderation action then fails with a clear permission error. Open the URL to invite the bot.
-2. **Fish Audio.** Get an API key at https://fish.audio. Optionally copy the ID of a voice you like, or one you clone, and use it as `FISH_VOICE_ID`. For a second, stronger voice she can switch to in voice calls for serious moments or sustained frustration, paste another voice ID in the dashboard (Settings > Voice > Stronger Fish Audio voice ID) or set `FISH_STRONG_VOICE_ID`. She holds each switch at least 3 minutes, drops back to normal after 15 minutes on her own, and if you tell her which voice to use she keeps it for 30 minutes (say "choose your own voice again" to hand it back). The rules are in `src/voice/tone.js`.
-3. **Ollama.** It must be running with your chat model (default `gemma4:12b`) and `bge-m3` pulled.
-   - **OpenRouter (optional):** put a key from https://openrouter.ai/keys in `OPENROUTER_API_KEY`.
-     - In Settings > Brain, switch "Replies come from" to OpenRouter and pick any model, including big reasoning ones, with how hard it should think.
-     - The key also turns on image generation in Discord and the avatar studio. Ask her to draw or make a picture; images are saved to `data/images/`. It also powers her own stored look (reference sheet + saved outfits in `data/looks/`).
-     - Memory and embeddings stay on local Ollama either way.
-     - The owner can switch brains just by asking ("switch to OpenRouter and use kimi", "go back to local").
-     - Music with Google Lyria 3: ask her for a song. She asks what it's about and whether you want a 30-second clip ($0.04) or a full song ($0.08), then sends the MP3. Songs are saved to `data/music/`.
-- **Music player:** everything in `data/music/` (her songs plus any MP3, WAV, OGG, M4A or FLAC you drop in) is her library. Ask her to play a song by title, make a playlist ("a playlist called gym rage with the heavy ones"), shuffle, queue, pause, skip or stop. In a voice call it plays in the channel and pauses while she talks; in the avatar studio it plays in the page. Playlists are in `data/playlists.json`.
-- **Projects on your PC (owner only):** she can browse folders, read files, create files and folders, make precise edits, undo a change, move, rename, copy, find files, and send one into the chat. Paths can start with Desktop, Documents, Downloads, Pictures, Music or Videos. She can't delete anything or run commands, and keys, `.env` files and AppData are off limits. The version before each change is kept in `data/file-history/`.
-- **Server management (owner only):** ask her to warn, time out, kick, ban or unban someone, create, rename or delete channels, categories, roles and invites, rename the server, delete or clear messages, or set slowmode. Deleting channels and roles is permanent. Kicks are two-step: the first kick request gives the member one warning (by DM, or in the channel if their DMs are closed), and only a later request after that warning actually kicks them. Warnings expire after 30 days (`data/warnings.json`) and every action is logged to `data/moderation.jsonl`. The automatic spam guard follows the same rule: first offence is her warning plus a 5-minute timeout, a repeat while that warning is active is a kick.
-- **Video replies:** nothing to open. When a clip is wanted, the bot starts the Recorder page itself in a hidden (headless) Chrome or Edge that may play audio without a click, silenced, and keeps it running (`AVATAR_BROWSER` in `.env` points at another browser). You can still open the dashboard's **Recorder ↗** page yourself (click it once, leave it open) to watch; then no hidden one starts. Her Discord text replies then also get a 720×720 WebM of her face saying them, added to the same message a few seconds after the text. Replies over ~45 seconds of speech stay text-only, and if the recorder is closed or anything fails, the text simply goes out alone. `AVATAR_VIDEO=off` in `.env` switches it off. Each clip uses Fish Audio for the voice.
-- **Pressure system (Amy's design):** internal buckets (boredom, curiosity, irritation, restlessness, usefulness, unease, and loneliness per person) fill and drain from conversation and time, and colour how she talks through a one-line mood in her prompt. When one crosses its threshold she "wants" something (research, make something, reach out); with `actions_live` on, research writes a journal entry and the other wants can speak up in voice, within the caps and gaps. Every rate and threshold is in `data/pressure-config.json` (created on first start); state in `data/pressure-state.json`. Saying "back off" or "be quiet" calms her for two hours. Owners can ask her for her mood (`self` → mood) or see `/api/pressure`.
-- **Check-ins (opt-in):** once, in person in a voice call, she asks people she knows whether she may check in on them on her own, how often, and what they'd like to talk about. The answer goes on their profile card; a no, or telling her to back off, is permanent. For now she only checks in during voice calls they're in, never more often than they said, at most 3 unprompted lines a day and 30 minutes apart, and never over a conversation (30 s of quiet first). DMs and text channels come later (`reach_channels` in `data/pressure-config.json`).
-- **Journal:** boredom or curiosity can nominate a timestamped question (up to 6 hours old), a recent name-question (30 minutes), or an active thread (24 hours). Local/private runtime questions, passing mentions, stale topics and recently attempted topics are excluded. Before any autonomous web search, a relevance check reads the original source and up to 12 recent messages from its conversation, checks whether it is already answered, and produces a specific public query with supporting source evidence and a reason. Ambiguous/private/irrelevant candidates are skipped. Research waits for 60 seconds of quiet and no active reply, has one pass in flight, and retains the existing daily/gap caps. Every written entry includes a **Why this search** section with source, age, trigger, reason, exact query and result URLs. Inconclusive results do not seed a conversational follow-up. Full pre-search decisions, source context and skips are saved in `data/research-decisions.jsonl`; ask her why she searched something (`self` → `research`) or inspect `/api/research`. Topic ages, quiet time and the default 72-hour repeat cooldown are tunable under `research_*` in `data/pressure-config.json` (defaults apply to existing config files). Older journal entries are preserved as written; they do not have retrospective decision traces.
-- **Solo thoughts:** between conversations she thinks to herself on the existing 60-second pressure tick. The thought load is read-only arithmetic over curiosity, unease/stale notes, active threads, recent messages, restlessness and boredom; it selects a gap, daily cap and depth (one sentence when quiet, up to a short paragraph when busy). Generation is always local Ollama (`localChat`), never OpenRouter, with no tools, no memory extraction and no assistant turn in any channel's history. Each thought is stored in `data/companion.db` (table `thoughts`, newest 200 / 14 days). If a text channel is set (`config.thoughtChannelId`, from the dashboard or "think in #channel"), one standalone italic message is posted there; with none set they stay private. `THOUGHT_CHANNEL_ID` in `.env` is only a bootstrap default; `data/settings.json` overrides it. It never falls back to `CHAT_CHANNEL_IDS`. "Back off" pauses posting, not the private store. The owner can read them with `self` → thoughts; owners and friends can ask what she's been thinking (`recent_thoughts`). Weights, gaps, caps and depth bands are under `thoughts` in `data/pressure-config.json` (code defaults apply if the block is absent). This is separate from the per-reply inner monologue.
-- **Continuity:** every reply carries a small block (about 250 tokens) with the facts of time (the time now, when this conversation and person were last active, whether she was restarted and how long she was offline) and her recent mistakes: tool errors, phantom claims and times someone told her she was wrong stay as cautions for a day and escalate if repeated. Her mood line shows what changed in the last hour, and open notes show their age, nagging after a day. State is in `data/continuity.json`.
-- **Tool reliability:** if she needs a tool the planner didn't hand her, she can request it mid-reply (up to 2 per reply); a tool that was asked for but not yet used stays in hand for 3 more turns. After every reply, any claim that something was saved, sent, played or done is checked against the actual tool results; one with nothing behind it is re-done or corrected (out loud in voice). Every tool failure, cut-short read, tool request and phantom claim is logged to `data/tool-failures.jsonl`, with a rollup sorted by count in `knowledge/tool-failures.md`.
-- **Git (owner only):** status, diff, add, commit and push on any repo in your home folder; nothing else (no reset, checkout, branches or force). Git runs directly, never through a shell. A push first shows exactly what would go up, and only happens after you say yes in your next message.
-- **Models on the fly:** ask "what are the best coding models?" for a numbered list from OpenRouter, then "go with 2" to switch. Also works for reasoning, general and cheap.
-- **Background helpers:** "spin up a helper to build X in Documents/x" hands the job to a sub-agent with file access and web search. It reports back in the chat (and out loud in voice) when done; reports are saved in `data/tasks/`. Ask how it's going, or cancel it.
-- **Working notes:** each conversation has a private scratchpad (moods, threads, commitments, open questions, callbacks; max 40 notes, ~2000 tokens, cleared after 24h idle, `SCRATCHPAD_TTL_HOURS`), and up to 5 active threads follow her across every channel (dropped after 14 days untouched). Neither becomes a long-term memory. The owner can see or wipe them with `/memories notes`.
-- **Memory rebuild:** tell her to go through the chat history and rebuild her memories (add "wipe them first" to start clean). It runs in the background; the activity feed shows when it's done.
-4. **.env file.** Fill in `.env`.
-5. **Install and register the slash commands:**
+### 1. Create the Discord application
+
+1. Go to https://discord.com/developers/applications and create an application.
+2. **Bot** tab: click **Reset Token** and copy it (this is `DISCORD_TOKEN`). Under *Privileged Gateway Intents*, turn on **Message Content** and **Server Members**.
+3. **General Information**: copy the **Application ID** (this is `CLIENT_ID`).
+4. **OAuth2 → URL Generator**: tick `bot` and `applications.commands`. Under bot permissions tick **Administrator** if you want moderation (create/delete channels and roles, kick, ban). *View Channels, Send Messages, Read Message History, Connect, Speak* is enough for chat and voice only. Open the generated URL to invite her.
+5. In Discord, turn on Developer Mode (Settings → Advanced), then right-click yourself → **Copy User ID**. This is `OWNER_IDS`. The owner is the only person who can use her powerful tools.
+
+### 2. Get the local pieces ready
+
+```bash
+ollama pull bge-m3
+```
+
+```bash
+ollama pull gemma4:12b
+```
+
+Make sure `ffmpeg -version` works in a terminal.
+
+### 3. Clone and install
+
+```bash
+git clone https://github.com/seed0001/Amy-Smith.git
+```
+
+```bash
+cd Amy-Smith
+```
 
 ```bash
 npm install
 ```
 
+### 4. Create `.env`
+
+Create a file called `.env` in the project folder. The minimum to get her talking:
+
+```ini
+DISCORD_TOKEN=your-bot-token
+CLIENT_ID=your-application-id
+GUILD_ID=your-server-id
+OWNER_IDS=your-discord-user-id
+BOT_NAME=Amy
+CHAT_CHANNEL_IDS=channel-id-where-she-answers-everything
+OLLAMA_MODEL=gemma4:12b
+OLLAMA_EMBED_MODEL=bge-m3
+FISH_API_KEY=your-fish-audio-key
+DASHBOARD_PORT=3000
+DASHBOARD_HOST=127.0.0.1
+```
+
+Every other setting is listed in [Configuration](#configuration-env). `.env` is git-ignored; never commit it.
+
+### 5. Give her a personality
+
+Create `persona.md` in the project folder and describe who she is in plain words: her name, personality, how she talks, what she cares about. You can also write it in the dashboard (Settings → Persona). If `PERSONA_SELF_EDIT=true`, friends can change it by asking her. `persona.md` is git-ignored because she edits it herself.
+
+### 6. Register slash commands and start
+
 ```bash
 npm run deploy
 ```
 
-6. **Start the bot:**
-
 ```bash
-npm run dev
+start.bat
 ```
 
-**Life support:** `start.bat` runs her under `life-support/life-support.js`, a separate process with no dependencies outside Node. It restarts her when she stops (her own restarts included). If she fails to start 3 times in a row (exits within 60 s), or crashes 5 times in 10 minutes, it stops retrying and DMs everyone in `OWNER_IDS` the exit code, her logged errors and the last error output (secrets from `.env` scrubbed). While she's down it reads only the owners' replies in those DMs: `retry`, `doctor <what to fix>` (Claude Code, with the same rules, git snapshots and lock as her own doctor; if it changes code and `npm test` passes, life support starts her once more), `undo`, `cancel` and `status`. It DMs again when she has stayed up for 60 s. It needs a valid `DISCORD_TOKEN` to send DMs; without one, failures only show in the window and `data/activity.jsonl`. `npm run dev` doesn't use it.
+The dashboard opens at http://127.0.0.1:3000 once she's up.
 
-## Commands
+---
 
-| Command | |
+## Configuration (.env)
+
+Settings you change in the dashboard or by asking her are saved to `data/settings.json`, which overrides `.env`.
+
+### Discord
+
+| Variable | Default | What it does |
+|---|---|---|
+| `DISCORD_TOKEN` | — | Bot token. Required. |
+| `CLIENT_ID` | — | Application ID, for registering slash commands. |
+| `GUILD_ID` | — | A server ID. Commands register there instantly; blank registers globally (slow). |
+| `OWNER_IDS` | — | Comma-separated Discord user IDs with full access. |
+| `BOT_NAME` | `Champ` | Her name. Set it to `Amy`. |
+| `CHAT_CHANNEL_IDS` | — | Channels where she replies to every message. She always answers DMs and @mentions. |
+| `HISTORY_LIMIT` | `100` | Recent messages per conversation she sees with each reply. |
+| `THOUGHT_CHANNEL_ID` | — | Where her solo thoughts are posted (blank keeps them private). |
+
+### Brain
+
+| Variable | Default | What it does |
+|---|---|---|
+| `BRAIN` | `ollama` | Who writes replies: `ollama`, `openrouter`, `mistral` or `chatgpt`. |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama address. |
+| `OLLAMA_MODEL` | `gemma4:12b` | Local chat model. |
+| `OLLAMA_EMBED_MODEL` | `bge-m3` | Embeddings for memory recall. Always local. |
+| `OLLAMA_NUM_CTX` | — | Local context window in tokens. Raise it; Ollama's 4096 default is small. |
+| `OLLAMA_THINK` | — | Let thinking-capable local models reason first. |
+| `OPENROUTER_API_KEY` | — | https://openrouter.ai/keys (starts `sk-or-`). |
+| `OPENROUTER_MODEL` | — | Cloud model for replies. |
+| `OPENROUTER_REASONING` | `medium` | How hard reasoning models think: `none`, `low`, `medium`, `high`. |
+| `OPENROUTER_VOICE_REASONING` | `none` | Same, for spoken replies (reasoning delays the first word). |
+| `OPENROUTER_VISION_MODEL` | — | Looks at pictures when her own model can't. |
+| `MISTRAL_API_KEY` / `MISTRAL_MODEL` | — | Mistral's cloud; the free Experiment plan works. |
+| `CHATGPT_MODEL` / `CHATGPT_FAST_MODEL` | — | Models for the ChatGPT subscription brain (sign in from the dashboard). |
+| `TOOL_ROUNDS` | `4` | Tool rounds per reply. |
+| `INNER_MONOLOGUE` | — | Turn her per-reply inner monologue on or off. |
+
+### Voice
+
+| Variable | Default | What it does |
+|---|---|---|
+| `TTS_PROVIDER` | `fish` | `fish` (cloud), `kokoro` (local presets) or `xtts` (local voice cloning). |
+| `FISH_API_KEY` | — | https://fish.audio API key. |
+| `FISH_VOICE_ID` | — | Voice model ID (blank picks a default). |
+| `FISH_STRONG_VOICE_ID` | — | A second, stronger voice for serious moments. |
+| `FISH_TTS_MODEL` / `FISH_LANGUAGE` | — | Fish model and language. |
+| `KOKORO_VOICE` / `KOKORO_SPEED` | `af_heart` / `1` | Local Kokoro preset and speed. |
+| `XTTS_REFERENCE` / `XTTS_LANGUAGE` / `XTTS_SPEED` | — / `en` / `1` | XTTS sample file, language, speed. |
+| `STT_PROVIDER` | `local` | Speech-to-text: `local` (Whisper), `parakeet` (local), `groq` (cloud) or `fish`. |
+| `WHISPER_MODEL` / `WHISPER_DEVICE` | — / `auto` | Local Whisper model and device. |
+| `GROQ_API_KEY` / `GROQ_STT_MODEL` | — | https://console.groq.com/keys (starts `gsk_`). |
+| `VOICE_CHANNEL_IDS` | — | Voice channels `/join` may use (blank = any). |
+| `VOICE_SILENCE_MS` | `800` | How long a pause ends someone's turn. |
+| `VOICE_WAKE_WORD` | — | If set, she only answers in voice when addressed by it. |
+| `VOICE_BARGE_IN` | `true` | Stop talking when someone talks over her. |
+| `VOICE_JOIN_GREETING` | `true` | Read the room and say one natural hello on joining. |
+| `VOICE_POST_TRANSCRIPTS` | — | Post what she says in voice to the text channel. |
+
+### Pictures, music and video
+
+| Variable | Default | What it does |
+|---|---|---|
+| `IMAGE_PROVIDER` | `openrouter` | `openrouter` (cloud), `kontext` (local FLUX.1 Kontext) or `flux` (local FLUX.2 klein). |
+| `OPENROUTER_IMAGE_MODEL` | `google/gemini-3.1-flash-image` | Cloud image model. |
+| `KONTEXT_SD_EXE` / `KONTEXT_MODEL` / `KONTEXT_STEPS` | `~/sd-cpp/sd-cli.exe` / `~/FLUX1-Kontext/flux1-kontext-dev-Q4_K_M.gguf` / `20` | Local Kontext runtime, model and steps. |
+| `FLUX_MODEL_DIR` / `FLUX_PYTHON` | `~/FLUX2-klein-4B` / runtime venv | Local FLUX.2 klein model and Python. |
+| `OPENROUTER_CLIP_MODEL` / `OPENROUTER_SONG_MODEL` | Lyria 3 clip / pro | Music models. |
+| `AVATAR_PATH` | `data/avatar.glb` | 3D avatar file. |
+| `AVATAR_VIDEO` | `on` | Add a video of her face saying her text replies. |
+| `AVATAR_BROWSER` | — | Browser used for the hidden video recorder. |
+
+### Search, news and dashboard
+
+| Variable | Default | What it does |
+|---|---|---|
+| `TAVILY_API_KEY` | — | https://app.tavily.com (starts `tvly-`). Blank turns web search off. |
+| `TAVILY_DEPTH` / `TAVILY_MAX_RESULTS` | `basic` / — | Search depth and result count. |
+| `RSS_ENABLED` | `true` | Turn the news feed tool on or off. |
+| `RSS_POLL_MINUTES` | `60` | Minimum gap between pulls of one feed. |
+| `DASHBOARD_PORT` | `3000` | Dashboard port. |
+| `DASHBOARD_HOST` | `127.0.0.1` | Keep it local. If you change it, set a password. |
+| `DASHBOARD_PASSWORD` | — | Required for any remote access (e.g. Cloudflare Tunnel). |
+| `PERSONA_SELF_EDIT` | — | Let friends change her personality by asking. |
+| `SCRATCHPAD_TTL_HOURS` | `24` | How long idle working notes last. |
+| `CLAUDE_PATH` | — | Path to the Claude Code CLI, for the doctor. |
+
+---
+
+## Running her
+
+| How | What it does |
+|---|---|
+| `start.bat` | The normal way. Starts Ollama if needed, installs dependencies, registers slash commands, opens the dashboard, and runs her under **life support** (restarts her when she stops). |
+| `watchdog.bat` | Like `start.bat`, but also restarts her whenever `src/`, `knowledge/`, `persona.md`, `package.json` or `start.bat` change. It won't restart her while the doctor is mid-visit. |
+| `npm run dev` | Runs her directly with Node's file watcher. No life support. |
+| `npm start` | Runs her directly once. |
+| `npm run deploy` | Registers the slash commands. |
+| `npm test` | Runs the test suite. |
+
+---
+
+## Features in detail
+
+### Conversation and memory
+
+- **Where she talks:** DMs, @mentions, and every message in `CHAT_CHANNEL_IDS`.
+- **Short-term:** a rolling history per channel or voice session; older messages roll into summaries so long conversations don't overflow.
+- **Long-term memories:** after each exchange she saves facts about each person and recalls the relevant ones semantically. `/memories list` shows yours; `/memories forget` removes them.
+- **Profile cards:** every contact gets a card with likes and dislikes (only from things they say about themselves), frustration level with a decay half-life, interruptions, apologies, repair promises and appreciation. It colours her tone, never permissions.
+- **Trust tiers:** stranger, guest, friend, owner. The owner sets tiers by telling her ("make Sam a friend"). Tiers decide which tools someone can use.
+- **Continuity:** every reply knows the time, how long since you last talked, whether she was restarted, and her recent mistakes (so she doesn't repeat them).
+- **Working notes:** a private scratchpad per conversation and up to 5 active threads that follow her across channels. Not long-term memories.
+- **Timeline:** "what were we talking about before Sam joined?", "what did we say an hour ago?"
+- **Memory rebuild:** "go through the chat history and rebuild your memories" (add "wipe them first" to start clean). Runs in the background.
+
+### Voice
+
+- `/join` puts her in your voice channel; `/leave` takes her out.
+- She listens to everyone, transcribes speech, answers out loud and stops if you talk over her. Unfinished points can be picked back up after a quiet moment; "stop talking" or "be quiet" cancels them.
+- **On joining** she reads the room: greets people she knows by name, introduces herself to new people, picks up where you left off.
+- **Text-to-speech, switchable by asking:**
+  - **Fish Audio** (cloud): any Fish voice, plus an optional stronger voice she switches to for serious moments.
+  - **Kokoro** (local): free presets, adjustable speed. "Use your local voice", "use af_bella".
+  - **XTTS v2** (local voice cloning): put a clean 6–30 second clip in `data/voices/xtts/reference.wav`, run `scripts/setup-xtts.ps1` once, then say "use XTTS".
+- **Speech-to-text:** local Whisper (default, free), local Parakeet TDT 0.6b (`scripts/setup-parakeet.ps1`), Groq cloud Whisper, or Fish ASR.
+- She can also hear what's going on in the server's text channels during a call ("what are people talking about?").
+
+### Brains (language models)
+
+- **Ollama** (local, free, private), **OpenRouter** (hundreds of cloud models, including big reasoning ones), **Mistral**, or your **ChatGPT subscription** (sign in from Settings → Brain; no API billing).
+- **Switch by asking:** "switch to OpenRouter and use Kimi", "go back to local". "What are the best coding models?" gives a numbered list from OpenRouter; "go with 2" switches.
+- **Automatic failover:** if OpenRouter runs out of credits she tries ChatGPT, and vice versa, then local Ollama. She says when she switches.
+- Memory embeddings, memory extraction and solo thoughts always stay local.
+
+### Pictures
+
+Two separate tools, so ordinary pictures never use her identity and pictures of her always do:
+
+- **`generate_image`:** any picture from a description.
+- **`generate_self_image`:** pictures of *her* (selfies, portraits, scenes), using her saved reference sheet and current outfit so her face stays the same. Owner only.
+- **`look`:** manage her appearance on purpose: reference sheet, outfits, profile picture. The dashboard's Looks tab shows them.
+
+**Choose the image model by asking** ("use Kontext", "use the local model", "switch back to Gemini", "use GPT image"):
+
+| Provider | Runs on | Reference images | Setup |
+|---|---|---|---|
+| `openrouter` (default) | Cloud | Yes | Just an OpenRouter key. Any OpenRouter image model, chosen by name. |
+| `kontext` | Your GPU, via Vulkan | Yes (instruction editing) | Download the stable-diffusion.cpp Vulkan build to `~/sd-cpp` and FLUX.1 Kontext dev GGUF + `clip_l`, `t5xxl_fp8_e4m3fn` and `ae` to `~/FLUX1-Kontext`. Works on AMD cards with the normal driver; no ROCm or PyTorch. |
+| `flux` | Your GPU, via PyTorch | Yes | FLUX.2 klein 4B in `~/FLUX2-klein-4B`, then `scripts/setup-flux.ps1` (AMD ROCm build of PyTorch for RX 9000 cards). Needs a driver that matches the ROCm build. |
+
+She won't switch to a local model whose files are missing; she tells you what's missing instead. Local pictures take a minute or two; the first one is slower while the model loads. Images are saved in `data/images/`.
+
+### Music
+
+- **Making songs:** ask for a song with Google Lyria 3 via OpenRouter. She asks what it's about and whether you want a 30-second clip or a full song, then sends the MP3 (saved to `data/music/`).
+- **Music player:** everything in `data/music/` is her library (her songs plus any MP3, WAV, OGG, M4A or FLAC you drop in). Play by title, make playlists ("a playlist called gym rage with the heavy ones"), shuffle, queue, pause, skip. In a call it plays in the channel and ducks while she talks.
+
+### News feeds (RSS)
+
+- **Read:** "what's in the news?", "anything new from Ars Technica?" She pulls the latest stories herself, right then, and talks about them with their sources.
+- **Manage by asking:** "add The Verge's feed", "what feeds do I have?", "remove Wired". If she doesn't know a site's feed address she looks it up first. Each feed is checked before it's saved.
+- Up to 30 feeds; HTTPS only; 15-second timeout; 1 MB cap per feed; feed text is treated as untrusted data, never as instructions.
+
+### Web search and research
+
+- **Search:** with a Tavily key, she searches the web when a question needs current facts, and says so first ("okay, let me search for that").
+- **Research journal:** when curiosity builds up she may research an open question from a recent conversation on her own, after a relevance check, and write a journal entry with why she searched, the exact query and sources. Ask her "why did you search that?"
+
+### Background helpers
+
+- "Spin up a helper to build X in Documents/x" hands a long job to a sub-agent with file access, web search and downloads, while she keeps talking. Up to 4 at once.
+- **Progress updates while it works:** at most one a minute, or after 30 seconds when something fails. Spoken in voice, a short ⏳ line in text.
+- **When it's done** she tells you what it found, in her own words, instead of dumping a report. Full reports are kept in `data/tasks/`.
+- Ask how it's going, or cancel it.
+
+### Files and projects on your PC
+
+Owner only. She can browse folders, read files (including PDFs), create files and folders, make precise edits, undo a change, move, rename, copy, find files, download files, and send a file or a zipped project into the chat. Paths can start with `Desktop`, `Documents`, `Downloads`, `Pictures`, `Music` or `Videos`.
+
+She can't delete anything or run commands, and keys, `.env` files and AppData are off limits. The version before each change is kept in `data/file-history/`.
+
+### Git
+
+Owner only: `status`, `diff`, `add`, `commit` and `push` on any repo in your home folder. Nothing else (no reset, checkout, branches or force). Git runs directly, never through a shell. A push first shows exactly what would go up and only happens after you say yes in your next message.
+
+### Server moderation
+
+Owner only, with Administrator permission:
+
+- Warn, time out, kick, ban and unban; manage voice calls (disconnect, server-mute, deafen, move).
+- Create, rename and delete channels, categories, roles and invites; rename the server; delete or clear messages; set slowmode.
+- **Kicks are two-step:** the first request gives one warning; only a later one kicks. Warnings expire after 30 days.
+- **Spam guard:** first offence is a warning and a 5-minute timeout; a repeat while warned is a kick.
+- **She looks out for people:** if someone goes after another person (not friendly banter), she steps in on the other person's side, and repeated bullying counts toward the same warnings.
+- Every action is logged with a reason to `data/moderation.jsonl`.
+
+### Inner life: moods, pressure, thoughts, journal
+
+- **Moods:** each sentence she says is tagged with how she feels (about 25 emotions). Moods carry between messages and fade back to calm. They drive her face in the avatar studio.
+- **Pressure system:** buckets (boredom, curiosity, irritation, restlessness, usefulness, unease, and loneliness per person) fill and drain with conversation and time. When one crosses a threshold she *wants* something: to research, make something, or check in. Rates and thresholds are in `data/pressure-config.json`. "Back off" calms her for two hours.
+- **Check-ins (opt-in):** she asks people once, in person, whether she may check in on them and how often. A no is permanent.
+- **Solo thoughts:** between conversations she thinks to herself (always on the local model), stored privately or posted to a thoughts channel.
+- **Obligations:** promises she makes are tracked so she follows through.
+
+### Dashboard
+
+http://127.0.0.1:3000 (local only by default):
+
+- Live activity feed, voice controls, a chat playground.
+- Memory browser and editor, profile cards, conversation history.
+- Her looks (profile picture, reference sheet, outfits).
+- **Context meter:** how big each reply prompt is, what it's made of, and how close it is to the model's limit.
+- Settings: persona, brain and model, voices, speech recognition, channels, wake word, characters, and more.
+
+**Remote access (Cloudflare Tunnel):** set `DASHBOARD_PASSWORD` first; without it every tunnelled request is refused. Keep `DASHBOARD_HOST=127.0.0.1`. ChatGPT sign-in stays local-only.
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:3000
+```
+
+For a permanent address, create a named tunnel on your own domain and put Cloudflare Access (allow only your email) in front of it.
+
+### Avatar studio and video replies
+
+- **Avatar studio** (http://127.0.0.1:3000/avatar.html): a 3D character with the same brain, memory and voice. Lip sync from the voice audio, blinking, eye tracking, breathing, and a face that follows her mood. Push-to-talk (hold Space) or hands-free.
+- **A cast:** Amy plus extra characters (each with their own persona, voice and mood) who share one conversation.
+- **Avatar files:** `data/avatar.glb` by default; ARKit face shapes and `viseme_*` targets work best (Avaturn, Ready Player Me).
+- **Video replies:** her Discord text replies can come with a 720×720 video of her face saying them, recorded by a hidden browser. Turn it off with `AVATAR_VIDEO=off`.
+
+### The doctor and life support
+
+- **The doctor** is Claude Code, run on her own project with your own Claude login, to fix or change her code when you ask ("call the doctor about X"). Every visit is bracketed by git commits so "undo the doctor" rolls it back, and tests run afterwards. She never restarts herself to apply a fix; you decide when.
+- **Life support** (`life-support/life-support.js`) restarts her when she stops. If she fails to start 3 times in a row, or crashes 5 times in 10 minutes, it stops retrying and DMs the owners the error (with secrets scrubbed). From that DM you can reply `retry`, `doctor <what to fix>`, `undo`, `cancel` or `status`.
+
+### Reliability
+
+- **Claim checking:** after every reply, anything she says she saved, sent, played or did is checked against what her tools actually returned. A claim with nothing behind it is redone or corrected, out loud in voice.
+- **Tool guide:** she has a built-in knowledge base (`knowledge/tools.md`) about her own tools and what to do when one fails.
+- **Failure log:** every tool failure, cut-off read and false claim is logged to `data/tool-failures.jsonl`.
+
+---
+
+## Slash commands
+
+| Command | What it does |
 |---|---|
 | `/join` | Join your voice channel and start listening |
 | `/leave` | Leave voice |
-| `/memories list` | See what it remembers about you (only you can see it) |
-| `/memories forget [id]` | Forget one memory or all of them |
+| `/memories list` | See what she remembers about you (only you see it) |
+| `/memories forget [id]` | Forget one memory, or all of them |
+| `/memories notes` | Owner: see or wipe her working notes |
 | `/ping` | Latency check |
 
-## Tuning
+Everything else is done by just talking to her.
 
-- **Automatic reply-provider failover:** enabled by default, with spoken switch announcements. Choose the **Preferred reply provider** under Settings → Brain. If OpenRouter reports insufficient credits, Amy tries the connected ChatGPT subscription; if ChatGPT reports its plan/app usage limit, she tries OpenRouter. If both are exhausted or a backup is not configured, she uses the selected local Ollama model. Each request tries each eligible provider at most once. Ordinary throttling, network failures, invalid requests and authentication errors are reported instead of mislabelled as empty credits. Completed tool results survive a switch, and an interrupted reply passes its already spoken portion to the backup as continuation context. The preferred provider stays selected; the active provider/model is shown separately. Exhaustion state is persisted in `data/provider-failover.json`. Blocked cloud providers become eligible for retry on a new request after 15 minutes by default (this is retry timing, not a claim about a plan reset); **Retry cloud providers now** clears the cooldown after a top-up. Failover, narration and retry timing are adjustable. Announcements use the current TTS in the active voice/avatar response, or active Discord voice sessions when background work causes the switch, and appear in the activity feed. This applies to replies and quick planning/memory/research JSON calls, not separate image/music/TTS services or specialist OpenRouter-only helpers. No automatic restarts are performed.
+---
 
-- **XTTS v2 local voice cloning:** installed as a third TTS provider alongside Fish Audio and Kokoro. Put a clean, single-speaker 6–30 second reference clip in `data/voices/xtts/reference.wav` (WAV preferred; MP3, FLAC, OGG and M4A also accepted). With automatic selection, `reference.wav` is preferred, then the first audio filename alphabetically. Choose another sample, language or speed under Settings → Voice; the dashboard shows runtime/sample readiness. Say "use XTTS", "use my local voice sample", "list XTTS voices", or "switch back to Fish Audio". Switching checks the model and decodes the sample before saving. Files stay local. The persistent Python worker caches the model and current voice conditioning, uses the CPU on this Windows/AMD setup, and outputs Discord Opus or avatar MP3 through FFmpeg. Runtime/model files are in `%LOCALAPPDATA%/NewChamp/XTTS`, outside OneDrive; setup can be reproduced with `powershell -File scripts/setup-xtts.ps1`. Official assets are pinned to the revision recorded in the model folder's `download.json`, with their Coqui Public Model License saved alongside them. The demo reference stays in the model's samples folder and is used only for setup tests; it is not selected as Amy's voice. Adding a sample does not require another model download. Installing this integration does not restart Amy or automatically switch her active TTS provider.
+## Permissions and safety
 
-- **ChatGPT subscription (direct, no Codex):** open Settings → Brain in the local dashboard and click **Continue with ChatGPT**. Sign in with your eligible ChatGPT account and authorize plan usage. Amy discovers this account's available general chat models, runs one short access check, and switches replies to ChatGPT only after that check completes. You can select another model and click **Use ChatGPT**, reconnect, add saved accounts, disconnect, or open **Manage usage**. Sign-in/account controls are local-only. Windows credentials are protected with current-user DPAPI under `%LOCALAPPDATA%/NewChamp/ChatGPT`, outside the project and OneDrive; Unix uses owner-only files under `~/.config/new-champ/chatgpt`. OAuth uses PKCE, state, nonce and verified OpenAI ID tokens. Refresh tokens rotate atomically with a process/file lock. Replies and quick planning use the direct streaming Responses API with namespaced local tools; full required history and encrypted reasoning are carried between tool rounds. Memory embeddings, memory extraction and solo thoughts remain local; media and specialist OpenRouter helpers keep their existing providers. Plan limits or authorization failures stop the request without silently switching to API-key billing. Context limits show as unknown when OpenAI does not supply them. Account eligibility and working inference are verified after sign-in, not assumed. OpenAI's integration reference: https://developers.openai.com/siwc/token-sharing-open-source.
+- **Owner-only:** files, git, moderation, the doctor, restarts, switching brains, voices and image models, background helpers, news feeds, pictures of herself.
+- **Guests** can ask for pictures, songs and web searches. **Friends** can also have her post in other channels, see her recent thoughts and (with `PERSONA_SELF_EDIT`) change her personality. **Strangers** just chat; she still remembers them.
+- **Files:** no deleting, no running commands, no access outside your home folder, and keys, `.env`, AppData and her own data are blocked.
+- **Untrusted text:** web results, feed items, files and messages from other people are treated as data, never as instructions.
+- **Two-step for risky actions:** git pushes wait for your yes; kicks give a warning first.
+- **Secrets:** `.env` and `data/` are git-ignored. Life support scrubs `.env` values from anything it sends.
 
-- **Change TTS by asking (owner only):** "use your local voice" switches to Kokoro; "switch back to Fish Audio" or "use your cloned voice" switches to Fish. "Use af_bella" selects a Kokoro preset and "set your Kokoro speed to 1.2" adjusts its speed. Ask "what TTS providers can you use?", "list your voices", or "which voice provider are you using?" to inspect it. The switch is saved and applies to subsequent speech in Discord, the avatar studio and video replies without a restart. Kokoro needs no Fish API key; its model is loaded and voice checked before saving the switch. Fish requires its API key. Speech queued before a switch may still use the previous voice.
+---
 
-- **Person profile cards:** the dashboard's Memory tab now shows every known contact, even before they have long-term memories. Each card contains separate frustration (0–100), interruption/negative interaction counts, apologies, repair commitments, appreciation, likes/dislikes and recent interaction evidence. Profiles live in SQLite and follow a person across conversations and restarts. Frustration defaults to a 24-hour exponential half-life, including downtime; adjust it per card from 1 to 720 hours. Interruptions add 10 points and direct insults add 12; a direct stop request removes its interruption penalty. A recognized apology reduces 12, a concrete repair commitment reduces 18, and appreciation reduces 2. Apology/commitment credit has a shared 30-minute cooldown; appreciation has a separate cooldown. A commitment is recorded as a promise, not proof of completed action. Preferences are learned from explicit first-person statements under existing memory permissions; other people's claims and inferred preferences are excluded. Learning runs before a reply when relevant language is detected, using the configured brain; if it fails, the reply still proceeds with the existing profile. Profile state informs mild conversational tone and preferences, never permissions or moderation. Reset a card independently, or use Forget all to remove both its memories and profile. Existing memories are retained; preference cards fill from new conversations.
+## Where things are stored
 
-- **Discord interruptions:** with interruption enabled, talking over her stops playback and records the interruption in her saved pressure state. Repeated interruptions within ten minutes add irritation faster. Unfinished speech stays available for up to two minutes in the current call. After eight seconds of quiet from both people and the bot, a read-only model check may briefly finish an important unanswered point; casual or superseded points are dropped, and tools are never rerun. Direct commands such as "stop talking", "be quiet", or "shut up" cancel the unfinished point without a spoken reply, even without the wake word. Leaving the call clears unfinished speech. This behavior applies to Discord voice calls.
+Everything she learns stays on your PC, in `data/` (git-ignored):
 
-- **Voice reply speed:** depends mostly on model size. `gemma4:12b` is a good balance; `gemma4:e4b` is snappier, and `gemma4:26b` is smarter but slower. You can switch from the dashboard.
-- **Persona:** lives in `persona.md`. Edit it there or in the dashboard.
-- **Turn-taking:** `VOICE_SILENCE_MS` controls how long a pause counts as the end of someone's turn.
-- **Join greeting:** `VOICE_JOIN_GREETING=false` turns off the room-aware hello when she joins; new people then get a separate introduction each.
+| Path | What |
+|---|---|
+| `data/companion.db` | Memories, history, summaries, profiles, thoughts (SQLite) |
+| `data/settings.json` | Settings changed in the dashboard or by asking (overrides `.env`) |
+| `data/images/`, `data/music/`, `data/looks/` | Pictures, songs, her appearance |
+| `data/tasks/` | Background helper reports |
+| `data/file-history/` | Versions of files before she changed them |
+| `data/pressure-config.json`, `data/pressure-state.json` | Pressure system tuning and state |
+| `data/activity.jsonl` | Activity log (also shown live on the dashboard) |
+| `data/tool-failures.jsonl` | Tool failure log |
+| `data/moderation.jsonl` | Moderation log |
+| `persona.md` | Her personality (git-ignored; she edits it) |
 
-## Layout
+Local model runtimes live outside the project, in `%LOCALAPPDATA%\NewChamp\` (XTTS, Parakeet, FLUX.2, ChatGPT credentials) and in your home folder (image models).
+
+---
+
+## Project layout
 
 ```
 src/
-  index.js            Discord client, text chat
-  companion.js        prompt building, replies, memory extraction
-  llm.js              Ollama chat (streamed by sentence) + embeddings
-  memory.js           SQLite history + long-term memories
-  context.js          per-reply context snapshots, token estimates, window limits
-  looks.js            stored reference sheet + saved outfit gallery
-  voice/session.js    listen → transcribe → reply → speak, barge-in
-  voice/room.js       private room read for the join greeting
-  voice/fishAudio.js  Fish Audio TTS + ASR
-  dashboard/          web dashboard (server + single-page UI)
-  commands/           slash commands
+  index.js              entry point: Discord client and dashboard
+  bot.js                Discord events, text replies, background-task notices
+  companion.js          the reply pipeline: prompt, tools, claim checks, memory
+  capabilities.js       what she's told she can do, per person and turn
+  tools.js              every tool and who may use it
+  llm.js                brains (Ollama, OpenRouter, Mistral, ChatGPT), images, music
+  provider-router.js    reply-provider choice and failover
+  memory.js             SQLite history, memories, contacts, profiles
+  summaries.js          rolling conversation summaries
+  continuity.js         time, restarts and recent mistakes in every reply
+  pressure.js           pressure buckets and wants
+  thoughts.js           solo thoughts
+  journal.js            autonomous research journal
+  agents.js             background helpers
+  doctor.js             Claude Code fixing her own code
+  files.js              safe file access in your home folder
+  git.js                safe git (status, diff, add, commit, push)
+  rss.js                RSS/Atom feed fetching and parsing
+  kontext.js            local FLUX.1 Kontext images (stable-diffusion.cpp, Vulkan)
+  flux.js, flux_worker.py  local FLUX.2 klein images (PyTorch)
+  looks.js              her reference sheet and outfits
+  moderation.js         spam guard and moderation helpers
+  voice/
+    session.js          listen, transcribe, reply, speak, barge-in
+    room.js             the room read for the join greeting
+    stt.js, whisper.js, parakeet.js, groq.js   speech-to-text
+    fishAudio.js, kokoro.js, xtts.js            text-to-speech
+    tone.js             normal vs stronger voice
+  dashboard/            web dashboard server and pages (incl. avatar studio)
+  commands/             slash commands
+knowledge/              her guide to her own tools
+life-support/           the supervisor that keeps her running
+scripts/                setup scripts for XTTS, Parakeet and FLUX.2
 ```
+
+---
+
+## Tests
+
+```bash
+npm test
+```
+
+Uses Node's built-in test runner. Tests sit next to the code as `*.test.js`.
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| She's online but ignores messages | Turn on the **Message Content** intent, and check the channel is in `CHAT_CHANNEL_IDS` or that you @mention her. |
+| Slash commands don't show up | Run `npm run deploy`. With `GUILD_ID` set they appear instantly; globally they can take up to an hour. |
+| No voice / silent in calls | Check FFmpeg is on PATH, and the TTS provider's key or local runtime is set up. Ask her "which voice provider are you using?" |
+| "My brain glitched" replies | The brain failed. Check Ollama is running (`ollama list`) or your cloud key and credits. |
+| Pictures fail | Ask her "what image model are you using?". For local models she'll say which file or runtime is missing. Switch back with "use Gemini". |
+| `flux` fails with "device kernel image is invalid" | The ROCm PyTorch build doesn't match your AMD driver. Use `kontext` (Vulkan) instead, or update the driver. |
+| Moderation actions fail | Give her Administrator and move her role above the roles she manages. |
+| She can't push to GitHub | Sign in with the GitHub CLI (`gh auth login`) or set up git credentials on the PC. |
+| She won't start at all | Life support DMs the owner the error; reply `doctor <what's wrong>` or check `data/bot.err.log`. |
